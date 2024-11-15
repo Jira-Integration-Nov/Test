@@ -1,0 +1,65 @@
+name: Jira Integration Workflow
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  jira_integration:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse Comment Command
+        id: parse_command
+        env:
+          COMMENT: ${{ github.event.comment.body }}
+        run: |
+          echo "Parsing comment: $COMMENT"
+          if [[ "$COMMENT" =~ ^/create-branch ]]; then
+            BRANCH_NAME=$(echo "$COMMENT" | awk '{print $2}')
+            echo "action=branch" >> $GITHUB_OUTPUT
+            echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          elif [[ "$COMMENT" =~ ^/create-commit ]]; then
+            COMMIT_MESSAGE=$(echo "$COMMENT" | cut -d' ' -f2-)
+            echo "action=commit" >> $GITHUB_OUTPUT
+            echo "commit_message=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
+          else
+            echo "action=none" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Branch
+        if: steps.parse_command.outputs.action == 'branch'
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "<>"
+          git checkout -b ${{ steps.parse_command.outputs.branch_name }}
+          git push -u origin ${{ steps.parse_command.outputs.branch_name }}
+
+      - name: Create Commit
+        if: steps.parse_command.outputs.action == 'commit'
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "<>"
+          git commit --allow-empty -m "${{ steps.parse_command.outputs.commit_message }}"
+          git push
+
+      - name: Update Jira Issue
+        uses: atlassian/gajira-comment@v3
+        with:
+          issue: ${{ github.event.issue.number }}
+          comment: |
+            GitHub Action completed:
+            - Action: ${{ steps.parse_command.outputs.action }}
+            - Details: ${{ steps.parse_command.outputs.branch_name || steps.parse_command.outputs.commit_message }}
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
